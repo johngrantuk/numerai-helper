@@ -9,14 +9,21 @@ function NumeraiHelper(SpaceName, is3box, EthAddress){
 }
 
 async function Load3Box(EthAddress, SpaceName){
-  const spaceData = await Box.getSpace(EthAddress, SpaceName);
+  var spaceData = await Box.getSpace(EthAddress, SpaceName);
+  if(this.is3box){
+    console.log('Loading 3Box Data...');
+    spaceData = await Load3Box(this.ethAddress, this.spaceName);
+    console.log(spaceData);
+    this.spaceData = spaceData;
+  }
   return spaceData;
 }
 
-async function SaveTo3Box(DataKey, DataValue){
+async function SaveTo3Box(spaceName, DataKey, DataValue){
   const accounts = await window.ethereum.enable();
   const box = await Box.openBox(accounts[0], window.ethereum);
-  const space = await box.openSpace(this.spaceName);
+  console.log('Opening space: ' + spaceName)
+  const space = await box.openSpace(spaceName);
   await space.syncDone;
   console.log('Opened');
   console.log('Saving...');
@@ -25,42 +32,56 @@ async function SaveTo3Box(DataKey, DataValue){
 
 }
 
-async function SaveToIPFS(JSONtoPin){
-  const pinata = pinataSDK('d55715fbb802a4a9f6e6', '875e23ab07418b3164f63cc419c9977ed36380eb141f70a21b1bdd8937347d28');
-  var pinataAuth = await pinata.testAuthentication();
-  // Check auth is ok.
-  //console.log('Pinata: ');
-  //console.log(pinataAuth);
+/*
+Returns postData
+*/
+NumeraiHelper.prototype.savePost = async function(RawData, StorageMethod, PinataApiKey, PinataApiSecret){
 
-  // save: jsonblob_v1_2_0 @ proofhash
-  // save: encryptedData @ encryptedDatahash
-  // var pin = await pinata.pinJSONToIPFS({encryptedData: encryptedFile});
-  var pin = await pinata.pinJSONToIPFS(JSONtoPin);
+  if(StorageMethod === '3Box'){
+    console.log('Saving Data To 3Box');
 
-  console.log(pin)
+    var postData = await this.createPostData(RawData);
+    console.log('Saving encrypted data to hash key: ' + postData.proofJson.encryptedDatahash);
+    await SaveTo3Box(this.spaceName, postData.proofJson.encryptedDatahash, postData.encryptedData);
 
-  // var pin = await pinata.pinJSONToIPFS(jsonblob_v1_2_0);
-  // console.log(pin);
+    console.log('Saving proof JSON to hash key: ' + postData.proofhash);
+    await SaveTo3Box(this.spaceName, postData.proofhash, JSON.stringify(postData.proofJson));
+    console.log('Data Saved.')
+    return postData;
 
-}
-
-PostHelper.prototype.test = async function(){
-  console.log('Testing: ' + this.spaceName);
-  this.createPost('test create post');
-  return;
-  if(this.is3box){
-    console.log('Loading 3Box Data...');
-    var spaceData = await Load3Box(this.ethAddress, this.spaceName);
-    console.log(spaceData);
-    this.spaceData = spaceData;
-  }
-}
-
-PostHelper.prototype.save = async function(DataKey, DataValue){
-  if(this.is3box){
-    console.log('Saving in 3Box');
   }else{
-    console.log('Saving in IPFS');
+    if(PinataApiKey === undefined || PinataApiSecret === undefined){
+      console.log('Please call with Pinata Account Credentials');
+      return;
+    }
+
+    const pinata = pinataSDK(PinataApiKey, PinataApiSecret);
+    var pinataAuth = await pinata.testAuthentication();
+
+    if(pinataAuth.authenticated != true){
+      console.log('Pinata Authentication Failed.')
+      return;
+    }
+    var postData = await this.createPostData(RawData);
+    console.log('Saving encrypted data...');
+    var pin = await pinata.pinJSONToIPFS({encryptedData: postData.encryptedData});
+    if(pin.IpfsHash != postData.proofJson.encryptedDatahash){
+      console.log('Error with Encrypted Data Hash.');
+      console.log(pin.IpfsHash)
+      console.log(postData.proofJson.encryptedDatahash)
+      return;
+    }
+
+    console.log('Saving proof JSON...');
+    var pin = await pinata.pinJSONToIPFS(postData.proofJson);
+    if(pin.IpfsHash != postData.proofhash){
+      console.log('Error with proof Hash.');
+      console.log(pin.IpfsHash)
+      console.log(postData.proofhash)
+      return;
+    }
+    console.log('Data Saved.')
+    return postData;
   }
 }
 
@@ -68,7 +89,7 @@ PostHelper.prototype.save = async function(DataKey, DataValue){
 This receives raw data, generate sym key, encrypts data and creates JSON proof hash for user to save to feed contract.
 
 */
-PostHelper.prototype.createPost = async function(RawData){
+NumeraiHelper.prototype.createPostData = async function(RawData){
   // SymKey Generate sym key
   const symmetricKey = ErasureHelper.crypto.symmetric.generateKey();    // base64 string
 
@@ -90,13 +111,6 @@ PostHelper.prototype.createPost = async function(RawData){
       })
 
   // encryptedDatahash = sha256(encryptedData)
-  /*
-  const encryptedDataHash = await ErasureHelper.multihash({
-        input: encryptedFile,
-        inputType: 'raw',
-        outputType: 'hex',
-      })
-  */
   // This hash will match the IPFS pin hash
   const encryptedDataHash = await ErasureHelper.multihash({
         input: JSON.stringify({encryptedData: encryptedFile}),
@@ -106,21 +120,14 @@ PostHelper.prototype.createPost = async function(RawData){
 
   // jsonblob_v1_2_0 = JSON(address_seller, salt, multihashformat(datahash), multihashformat(keyhash), multihashformat(encryptedDatahash))
   const jsonblob_v1_2_0 = {
-    address_seller: this.ethAddress,
+    creator: this.ethAddress,
     salt: ErasureHelper.crypto.asymmetric.generateNonce(),
     datahash: dataHash,
-    encryptedDataHash: encryptedDataHash,         // This allows the encrypted data to be located on IPFS or 3Box
-    keyHash: symmetricKeyHash
+    encryptedDatahash: encryptedDataHash,         // This allows the encrypted data to be located on IPFS or 3Box
+    keyhash: symmetricKeyHash
   }
 
   // proofhash = sha256(jsonblob_v1_2_0)
-  /*
-  const proofHash = await ErasureHelper.multihash({
-        input: JSON.stringify(jsonblob_v1_2_0),
-        inputType: 'raw',
-        outputType: 'hex',
-      })
-  */
   // This hash will match the IPFS pin hash. It should be saved to the users feed contract.
   const proofHash58 = await ErasureHelper.multihash({
         input: JSON.stringify(jsonblob_v1_2_0),
@@ -136,11 +143,15 @@ PostHelper.prototype.createPost = async function(RawData){
   console.log(encryptedDataHash);
   console.log(proofHash58);
 
-  // return proofhash for user to save to contract or could add
-  return proofHash58;
+  return {
+    proofJson: jsonblob_v1_2_0,
+    proofhash: proofHash58,
+    symmetricKey: symmetricKey,
+    encryptedData: encryptedFile
+  };
 }
 
-PostHelper.prototype.retrievePost = async function(SymKey_Buyer){
+NumeraiHelper.prototype.retrievePost = async function(SymKey_Buyer){
 
   // get from storage: jsonblob_v1_2_0 @ proofhash
   // keyhash
@@ -157,7 +168,7 @@ PostHelper.prototype.retrievePost = async function(SymKey_Buyer){
   // could add smart contract section too??
 }
 
-PostHelper.prototype.retrievePost = async function(SymKey_Buyer){
+NumeraiHelper.prototype.retrievePost = async function(SymKey_Buyer){
   // ErasureClient_Seller uploads SymKey to ipfs at multihashformat(keyhash)
   // ErasureClient_Seller uploads rawdata to ipfs at multihashformat(datahash)
 }
