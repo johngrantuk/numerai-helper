@@ -2,10 +2,9 @@ const Box = require('3box');
 const ErasureHelper = require('@erasure/crypto-ipfs');
 const pinataSDK = require('@pinata/sdk');
 
-function NumeraiHelper(SpaceName, is3box, EthAddress){
+function NumeraiHelper(SpaceName, EthAddress){
   this.spaceName = SpaceName;
   this.ethAddress = EthAddress;
-  this.is3box = is3box;
 }
 
 async function Load3Box(EthAddress, SpaceName){
@@ -58,14 +57,14 @@ NumeraiHelper.prototype.savePost = async function(RawData, StorageMethod, Pinata
     const pinata = pinataSDK(PinataApiKey, PinataApiSecret);
     var pinataAuth = await pinata.testAuthentication();
 
-    if(pinataAuth.authenticated != true){
+    if(pinataAuth.authenticated !== true){
       console.log('Pinata Authentication Failed.')
       return;
     }
-    var postData = await this.createPostData(RawData);
+    postData = await this.createPostData(RawData);
     console.log('Saving encrypted data...');
     var pin = await pinata.pinJSONToIPFS({encryptedData: postData.encryptedData});
-    if(pin.IpfsHash != postData.proofJson.encryptedDatahash){
+    if(pin.IpfsHash !== postData.proofJson.encryptedDatahash){
       console.log('Error with Encrypted Data Hash.');
       console.log(pin.IpfsHash)
       console.log(postData.proofJson.encryptedDatahash)
@@ -73,8 +72,8 @@ NumeraiHelper.prototype.savePost = async function(RawData, StorageMethod, Pinata
     }
 
     console.log('Saving proof JSON...');
-    var pin = await pinata.pinJSONToIPFS(postData.proofJson);
-    if(pin.IpfsHash != postData.proofhash){
+    pin = await pinata.pinJSONToIPFS(postData.proofJson);
+    if(pin.IpfsHash !== postData.proofhash){
       console.log('Error with proof Hash.');
       console.log(pin.IpfsHash)
       console.log(postData.proofhash)
