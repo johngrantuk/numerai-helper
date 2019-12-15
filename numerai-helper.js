@@ -1,21 +1,11 @@
 const Box = require('3box');
 const ErasureHelper = require('@erasure/crypto-ipfs');
 const pinataSDK = require('@pinata/sdk');
+const axios = require('axios');
 
 function NumeraiHelper(SpaceName, EthAddress){
   this.spaceName = SpaceName;
   this.ethAddress = EthAddress;
-}
-
-async function Load3Box(EthAddress, SpaceName){
-  var spaceData = await Box.getSpace(EthAddress, SpaceName);
-  if(this.is3box){
-    console.log('Loading 3Box Data...');
-    spaceData = await Load3Box(this.ethAddress, this.spaceName);
-    console.log(spaceData);
-    this.spaceData = spaceData;
-  }
-  return spaceData;
 }
 
 async function SaveTo3Box(spaceName, DataKey, DataValue){
@@ -150,29 +140,72 @@ NumeraiHelper.prototype.createPostData = async function(RawData){
   };
 }
 
-NumeraiHelper.prototype.retrievePost = async function(SymKey_Buyer){
+/*
+// get from storage: jsonblob_v1_2_0 @ proofhash
+// keyhash
+// datahash
+// encryptedDatahash
 
-  // get from storage: jsonblob_v1_2_0 @ proofhash
-  // keyhash
-  // datahash
-  // encryptedDatahash
+// get from storage: encryptedData @ encryptedDatahash
 
-  // get from storage: encryptedData @ encryptedDatahash
+// rawdata = SymKey.decrypt(encryptedData)
 
-  // rawdata = SymKey.decrypt(encryptedData)
+// validates keyhash matches sha256(SymKey)
+// validates datahash matches sha256(rawdata)
 
-  // validates keyhash matches sha256(SymKey)
-  // validates datahash matches sha256(rawdata)
+// could add smart contract section too??
+*/
+NumeraiHelper.prototype.retrievePost = async function(JsonHash, SymmetricKey, StorageMethod){
 
-  // could add smart contract section too??
+  if(StorageMethod === '3Box'){
+    console.log('Retrieving Data From 3Box...')
+    /*
+    const accounts = await window.ethereum.enable();
+    const box = await Box.openBox(accounts[0], window.ethereum);
+    const space = await box.openSpace(this.spaceName);
+    */
+    console.log('Opening space: ' + this.spaceName)
+    var jsonAllData = await Box.getSpace(this.ethAddress, this.spaceName);
+    // var jsonStr = await space.public.get(JsonHash);
+    // console.log(jsonStr)
+    //var json = JSON.parse(jsonStr);
+    console.log(jsonAllData);
+
+    var jsonStr = jsonAllData[JsonHash]
+    var json = JSON.parse(jsonStr);
+    console.log(json);
+    console.log(json.encryptedDatahash)
+    // console.log(json);
+    var encryptedData = jsonAllData[json.encryptedDatahash];
+    console.log('Encrypted Data: ');
+    console.log(encryptedData);
+    const rawMessage = ErasureHelper.crypto.symmetric.decryptMessage(SymmetricKey, encryptedData);
+    console.log(rawMessage);
+    /*
+    var encryptedData = await space.public.get(json.encryptedDatahash);
+    console.log('Encrypted Data: ');
+    console.log(encryptedData);
+    const rawMessage = ErasureHelper.crypto.symmetric.decryptMessage(SymmetricKey, encryptedData);
+    console.log(rawMessage);
+    */
+    // check hash
+  }else{
+    console.log('Retrieving IPFS Data...');
+    var response = await axios.get('https://ipfs.io/ipfs/QmZvESdPkNeLJVRYHVuE1ZTX2zroXYZ6mfAYRpmsBu8ruF');
+    console.log(response.data);
+    response = await axios.get('https://ipfs.io/ipfs/' + response.data.encryptedDatahash);
+    console.log('Encrypted Data: ');
+    console.log(response.data);
+    const rawMessage = ErasureHelper.crypto.symmetric.decryptMessage(SymmetricKey, response.data.encryptedData);
+    console.log(rawMessage);
+  }
 }
 
-NumeraiHelper.prototype.retrievePost = async function(SymKey_Buyer){
+NumeraiHelper.prototype.revealPost = async function(SymKey_Buyer){
   // ErasureClient_Seller uploads SymKey to ipfs at multihashformat(keyhash)
   // ErasureClient_Seller uploads rawdata to ipfs at multihashformat(datahash)
 }
 /* Selling
-
 Need buyer public key.
 Encrypt SymKey with BuyerPubKey
 Submit EncSymKey to Griefing contract.
