@@ -1,0 +1,10 @@
+{
+  "name": "numerai-helper",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "3box": "^1.14.0",
+    "@erasure/crypto-ipfs": "^1.2.1",
+    "@pinata/sdk": "^1.1.3",
+  }
+}
