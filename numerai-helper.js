@@ -184,51 +184,56 @@ NumeraiHelper.prototype.createPostData = async function(RawData){
  * @param {string} JsonHash Hash of proofJson - normally retrieved from On-Chain.
  * @param {string} SymmetricKey SymmetricKey used to decrypt data.
  * @param {string} StorageMethod 3Box or IPFS via Pinata. (Others can be added).
- * @return {object} Post object. !!!!!!!!
+ * @return {object} { rawData: rawMessage, hashCheck: hashCheck }
  */
 NumeraiHelper.prototype.retrievePost = async function(JsonHash, SymmetricKey, StorageMethod){
 
   if(StorageMethod === '3Box'){
-    console.log('Retrieving Data From 3Box...')
-    /*
-    const accounts = await window.ethereum.enable();
-    const box = await Box.openBox(accounts[0], window.ethereum);
-    const space = await box.openSpace(this.spaceName);
-    */
-    console.log('Opening space: ' + this.spaceName)
+    console.log('Retrieving Data From 3Box space: ' + this.spaceName);
+    // Data stored publically so no auth required.
     var jsonAllData = await Box.getSpace(this.ethAddress, this.spaceName);
-    // var jsonStr = await space.public.get(JsonHash);
-    // console.log(jsonStr)
-    //var json = JSON.parse(jsonStr);
-    console.log(jsonAllData);
-
+    // Get JSON proof object - this gives location of encrypted data via hash.
     var jsonStr = jsonAllData[JsonHash]
     var json = JSON.parse(jsonStr);
-    console.log(json);
-    console.log(json.encryptedDatahash)
-    // console.log(json);
+    // Get encrypted data.
     var encryptedData = jsonAllData[json.encryptedDatahash];
-    console.log('Encrypted Data: ');
-    console.log(encryptedData);
+    // Decode encrypted data.
     const rawMessage = ErasureHelper.crypto.symmetric.decryptMessage(SymmetricKey, encryptedData);
     console.log(rawMessage);
-    /*
-    var encryptedData = await space.public.get(json.encryptedDatahash);
-    console.log('Encrypted Data: ');
-    console.log(encryptedData);
-    const rawMessage = ErasureHelper.crypto.symmetric.decryptMessage(SymmetricKey, encryptedData);
-    console.log(rawMessage);
-    */
-    // check hash
+
+    const dataHash = await ErasureHelper.multihash({
+          input: rawMessage,
+          inputType: 'raw',
+          outputType: 'hex'
+        })
+
+    var hashCheck = json.datahash === dataHash;
+    return {
+      rawData: rawMessage,
+      hashCheck: hashCheck
+    }
   }else{
     console.log('Retrieving IPFS Data...');
-    var response = await axios.get('https://ipfs.io/ipfs/QmZvESdPkNeLJVRYHVuE1ZTX2zroXYZ6mfAYRpmsBu8ruF');
+    var response = await axios.get('https://ipfs.io/ipfs/' + JsonHash);
     console.log(response.data);
+    var hashCheck = response.data.datahash;
     response = await axios.get('https://ipfs.io/ipfs/' + response.data.encryptedDatahash);
     console.log('Encrypted Data: ');
     console.log(response.data);
     const rawMessage = ErasureHelper.crypto.symmetric.decryptMessage(SymmetricKey, response.data.encryptedData);
     console.log(rawMessage);
+
+    const dataHash = await ErasureHelper.multihash({
+          input: rawMessage,
+          inputType: 'raw',
+          outputType: 'hex'
+        })
+
+    var hashCheck = hashCheck === dataHash;
+    return {
+      rawData: rawMessage,
+      hashCheck: hashCheck
+    }
   }
 }
 
@@ -255,9 +260,56 @@ async function SaveTo3Box(spaceName, DataKey, DataValue){
   console.log('Saved')
 }
 
-NumeraiHelper.prototype.revealPost = async function(SymKey_Buyer){
-  // ErasureClient_Seller uploads SymKey to ipfs at multihashformat(keyhash)
-  // ErasureClient_Seller uploads rawdata to ipfs at multihashformat(datahash)
+/**
+ * Allows data owner to reveal post by saving data & key to selected storage.
+ * @param {string} SymKey Symmetric Key.
+ * @param {string} RawData Raw data from creator.
+ * @param {string} StorageMethod 3Box or IPFS via Pinata. (Others can be added)
+ * @param {string} PinataApiKey Only for IPFS.
+ * @param {string} PinataApiSecret Only for IPFS.
+ */
+NumeraiHelper.prototype.revealPost = async function(SymKey, RawData, StorageMethod, PinataApiKey, PinataApiSecret){
+
+  const symKeyHash = await ErasureHelper.multihash({
+        input: JSON.stringify({symmetricKey: SymKey}),
+        inputType: 'raw',
+        outputType: 'b58',
+      })
+
+  const rawDataHash = await ErasureHelper.multihash({
+        input: JSON.stringify({rawData: RawData}),
+        inputType: 'raw',
+        outputType: 'b58',
+      });
+
+  if(StorageMethod === '3Box'){
+    console.log('Saving Data To 3Box');
+    // Saves the symmetricKey to 3Box public space under key matching IPFS hash.
+    await SaveTo3Box(this.spaceName, symKeyHash, SymKey);
+    // Saves raw data to 3Box public space under key matching IPFS hash.
+    await SaveTo3Box(this.spaceName, rawDataHash, RawData);
+    console.log('Data Saved.')
+  }else{
+    // IPFS needs Pinata account credentials.
+    if(PinataApiKey === undefined || PinataApiSecret === undefined){
+      console.log('Please call with Pinata Account Credentials');
+      return;
+    }
+
+    // Make sure Pinata is authenticating.
+    const pinata = pinataSDK(PinataApiKey, PinataApiSecret);
+    var pinataAuth = await pinata.testAuthentication();
+    if(pinataAuth.authenticated !== true){
+      console.log('Pinata Authentication Failed.')
+      return;
+    }
+
+    // Saves the SymKey to IPFS.
+    var pin = await pinata.pinJSONToIPFS({symmetricKey: SymKey});
+    // Saves the data to IPFS.
+    pin = await pinata.pinJSONToIPFS({rawData: RawData});
+    console.log('Data Saved.')
+  }
 }
 
 module.exports = NumeraiHelper
