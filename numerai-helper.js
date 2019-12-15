@@ -3,57 +3,75 @@ const ErasureHelper = require('@erasure/crypto-ipfs');
 const pinataSDK = require('@pinata/sdk');
 const axios = require('axios');
 
+/**
+ * Helper for Numerai posts.
+ * @param {string} SpaceName For 3Box - name for public space that data will be stored. Suggest numerai.
+ * @param {string} EthAddress Post creator Ethereum address. Will also be used for 3Box.
+ */
 function NumeraiHelper(SpaceName, EthAddress){
   this.spaceName = SpaceName;
   this.ethAddress = EthAddress;
 }
 
-async function SaveTo3Box(spaceName, DataKey, DataValue){
-  const accounts = await window.ethereum.enable();
-  const box = await Box.openBox(accounts[0], window.ethereum);
-  console.log('Opening space: ' + spaceName)
-  const space = await box.openSpace(spaceName);
-  await space.syncDone;
-  console.log('Opened');
-  console.log('Saving...');
-  await space.public.set(DataKey, DataValue);
-  console.log('Saved')
-
-}
-
-/*
-Returns postData
-*/
+/**
+ * Creates required Post data from RawData and stores encrypted data and proof JSON using selected storage method.
+ * See createPostData for more info on data format.
+ * @param {string} RawData Raw data from creator.
+ * @param {string} StorageMethod 3Box or IPFS via Pinata. (Others can be added)
+ * @param {string} PinataApiKey Only for IPFS.
+ * @param {string} PinataApiSecret Only for IPFS.
+ * @return {object} Post object.
+ {
+  proofJson: {
+    creator: this.ethAddress,                      // Post creator address.
+    salt: ErasureHelper.crypto.asymmetric.generateNonce(),
+    datahash: dataHash,                            // Hash of the raw data - used for confirmation
+    encryptedDatahash: encryptedDataHash,         // This allows the encrypted data to be located on IPFS or 3Box
+    keyhash: symmetricKeyHash                      // Hash of symmetricKey used for encryption - used for confirmation
+  }
+  proofhash: proofHash58,                          // Hash of proofJson - should be saved on chain
+  symmetricKey: symmetricKey,                      // SymmetricKey used for encryption. For post creator to store.
+  encryptedData: encryptedFile                     // Encrypted data - used for storage.
+};
+ */
 NumeraiHelper.prototype.savePost = async function(RawData, StorageMethod, PinataApiKey, PinataApiSecret){
 
   if(StorageMethod === '3Box'){
     console.log('Saving Data To 3Box');
-
+    // Creates post data - See createPostData function for more info on data format.
     var postData = await this.createPostData(RawData);
     console.log('Saving encrypted data to hash key: ' + postData.proofJson.encryptedDatahash);
+    // Saves the encrypted data to 3Box public space under key matching encryptedDatahash.
     await SaveTo3Box(this.spaceName, postData.proofJson.encryptedDatahash, postData.encryptedData);
 
     console.log('Saving proof JSON to hash key: ' + postData.proofhash);
+    // Saves Proof JSON data to 3Box public space under key matching proofhash.
     await SaveTo3Box(this.spaceName, postData.proofhash, JSON.stringify(postData.proofJson));
     console.log('Data Saved.')
     return postData;
 
   }else{
+    // IPFS needs Pinata account credentials.
     if(PinataApiKey === undefined || PinataApiSecret === undefined){
       console.log('Please call with Pinata Account Credentials');
       return;
     }
 
+    // Make sure Pinata is authenticating.
     const pinata = pinataSDK(PinataApiKey, PinataApiSecret);
     var pinataAuth = await pinata.testAuthentication();
-
     if(pinataAuth.authenticated !== true){
       console.log('Pinata Authentication Failed.')
       return;
     }
+
+    // Creates post data - See createPostData function for more info on data format.
     postData = await this.createPostData(RawData);
+
     console.log('Saving encrypted data...');
+    // Saves the encrypted data to IPFS.
     var pin = await pinata.pinJSONToIPFS({encryptedData: postData.encryptedData});
+    // Check that JSON proof does have the correct info.
     if(pin.IpfsHash !== postData.proofJson.encryptedDatahash){
       console.log('Error with Encrypted Data Hash.');
       console.log(pin.IpfsHash)
@@ -62,7 +80,9 @@ NumeraiHelper.prototype.savePost = async function(RawData, StorageMethod, Pinata
     }
 
     console.log('Saving proof JSON...');
+    // Saves the proof JSON to IPFS.
     pin = await pinata.pinJSONToIPFS(postData.proofJson);
+    // Check that JSON proof does have the correct info.
     if(pin.IpfsHash !== postData.proofhash){
       console.log('Error with proof Hash.');
       console.log(pin.IpfsHash)
@@ -74,10 +94,29 @@ NumeraiHelper.prototype.savePost = async function(RawData, StorageMethod, Pinata
   }
 }
 
-/*
-This receives raw data, generate sym key, encrypts data and creates JSON proof hash for user to save to feed contract.
-
-*/
+/**
+ * Helper to convert the raw data to required Numerai format with other useful info.
+  generates a sym key
+  creates hash of sym key
+  encrypts the raw data
+  create hash of raw & encrypted data
+  creates JSON of the data to be saved on-chain
+  creates proof hash
+ * @param {string} RawData Raw data from creator.
+ * @return {object} Post object in format:
+  {
+   proofJson: {
+     creator: this.ethAddress,                      // Post creator address.
+     salt: ErasureHelper.crypto.asymmetric.generateNonce(),
+     datahash: dataHash,                            // Hash of the raw data - used for confirmation
+     encryptedDatahash: encryptedDataHash,         // This allows the encrypted data to be located on IPFS or 3Box
+     keyhash: symmetricKeyHash                      // Hash of symmetricKey used for encryption - used for confirmation
+   }
+   proofhash: proofHash58,                          // Hash of proofJson - should be saved on chain
+   symmetricKey: symmetricKey,                      // SymmetricKey used for encryption. For post creator to store.
+   encryptedData: encryptedFile                     // Encrypted data - used for storage.
+ };
+ */
 NumeraiHelper.prototype.createPostData = async function(RawData){
   // SymKey Generate sym key
   const symmetricKey = ErasureHelper.crypto.symmetric.generateKey();    // base64 string
@@ -140,21 +179,13 @@ NumeraiHelper.prototype.createPostData = async function(RawData){
   };
 }
 
-/*
-// get from storage: jsonblob_v1_2_0 @ proofhash
-// keyhash
-// datahash
-// encryptedDatahash
-
-// get from storage: encryptedData @ encryptedDatahash
-
-// rawdata = SymKey.decrypt(encryptedData)
-
-// validates keyhash matches sha256(SymKey)
-// validates datahash matches sha256(rawdata)
-
-// could add smart contract section too??
-*/
+/**
+ * Retrieves encrypted data from selected storage method, decrypts and checks against hash.
+ * @param {string} JsonHash Hash of proofJson - normally retrieved from On-Chain.
+ * @param {string} SymmetricKey SymmetricKey used to decrypt data.
+ * @param {string} StorageMethod 3Box or IPFS via Pinata. (Others can be added).
+ * @return {object} Post object. !!!!!!!!
+ */
 NumeraiHelper.prototype.retrievePost = async function(JsonHash, SymmetricKey, StorageMethod){
 
   if(StorageMethod === '3Box'){
@@ -201,22 +232,32 @@ NumeraiHelper.prototype.retrievePost = async function(JsonHash, SymmetricKey, St
   }
 }
 
+/**
+ * Saves data to 3Box. Requires user to authenticate - currently via MetaMask.
+ * @param {string} spaceName Name for public space that data will be stored. Suggest numerai.
+ * @param {string} DataKey Key, this will match IPFS hash of the data.
+ * @param {string} DataValue Data being saved.
+ */
+async function SaveTo3Box(spaceName, DataKey, DataValue){
+  // For MetaMask the user must give permission for application.
+  const accounts = await window.ethereum.enable();
+  // Open account 3Box. Will require user to sign via MetaMask.
+  const box = await Box.openBox(accounts[0], window.ethereum);
+  console.log('Opening space: ' + spaceName)
+  // Open app space - where the data will be stored (public space). Will require user to sign via MetaMask.
+  const space = await box.openSpace(spaceName);
+  // Wait for 3Box to sync.
+  await space.syncDone;
+  console.log('Opened');
+  console.log('Saving...');
+  // Save the data.
+  await space.public.set(DataKey, DataValue);
+  console.log('Saved')
+}
+
 NumeraiHelper.prototype.revealPost = async function(SymKey_Buyer){
   // ErasureClient_Seller uploads SymKey to ipfs at multihashformat(keyhash)
   // ErasureClient_Seller uploads rawdata to ipfs at multihashformat(datahash)
 }
-/* Selling
-Need buyer public key.
-Encrypt SymKey with BuyerPubKey
-Submit EncSymKey to Griefing contract.
-*/
-/* Buying/Reveal
-Get EncSymKey from Griefing contract.
-Decrypt SymKey
-Confirm SymKey hash is correct.
-Get Encrypted data from storage.
-Decrypt data.
-Confirm data hash.
-*/
 
 module.exports = NumeraiHelper
